@@ -43,6 +43,7 @@ jobs:
           SUMS=()
           for s in "${source[@]}"; do
             fname=$(basename "$s")
+            [ -f "$fname" ] || curl -sLO "$(eval echo "$s")"
             SUMS+=("'$(sha256sum "$fname" | awk '{print $1}')'")
           done
           printf 'sha256sums=(%s)\n' "$(printf '%s\n' "${SUMS[@]}" | paste -sd' ')" > /tmp/sums_line
