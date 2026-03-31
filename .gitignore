@@ -1,0 +1,8 @@
+*
+!PKGBUILD
+!aghub.desktop
+!.nvchecker.toml
+!.github/
+!.github/**
+!LICENSE
+!.gitignore

@@ -1,0 +1,65 @@
+name: Update and publish to AUR
+
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for new version
+        id: check
+        run: |
+          pip install nvchecker
+          OLD_VER=$(grep '^pkgver=' PKGBUILD | cut -d= -f2)
+          nvchecker -c .nvchecker.toml || true
+          if [ -f new_ver.json ]; then
+            NEW_VER=$(python3 -c "import json; print(json.load(open('new_ver.json'))['aghub-bin'])")
+          else
+            NEW_VER=$OLD_VER
+          fi
+          echo "old_ver=$OLD_VER" >> "$GITHUB_OUTPUT"
+          echo "new_ver=$NEW_VER" >> "$GITHUB_OUTPUT"
+
+      - name: Update PKGBUILD
+        if: steps.check.outputs.old_ver != steps.check.outputs.new_ver
+        run: |
+          NEW_VER=${{ steps.check.outputs.new_ver }}
+          sed -i "s/^pkgver=.*/pkgver=$NEW_VER/" PKGBUILD
+
+          # Download sources and generate checksums
+          source PKGBUILD
+          for s in "${source[@]}"; do
+            url=$(echo "$s" | sed 's/.*:://')
+            url_expanded=$(eval echo "$url")
+            fname=$(basename "$url_expanded")
+            [ -f "$fname" ] || curl -sLO "$url_expanded"
+          done
+
+          sha=$(sha256sum aghub_*_amd64.deb agentctl-*.tar.gz aghub.desktop 2>/dev/null | awk '{print "'\''"$1"'\''"}')
+          sed -i "/^sha256sums=/,/)/c\\sha256sums=($sha)" PKGBUILD
+
+          # Update .SRCINFO
+          docker run --rm -v "$PWD":/pkg archlinux:latest bash -c \
+            "pacman -Syu --noconfirm pacman-contrib && cd /pkg && makepkg --printsrcinfo > .SRCINFO"
+
+          # Commit
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add PKGBUILD .SRCINFO
+          git commit -m "Update to v$NEW_VER"
+          git push
+
+      - name: Publish to AUR
+        if: steps.check.outputs.old_ver != steps.check.outputs.new_ver
+        uses: KSXGitHub/github-actions-deploy-aur@v3.0.1
+        with:
+          pkgname: aghub-bin
+          pkgbuild: ./PKGBUILD
+          commit_username: ${{ secrets.AUR_USERNAME }}
+          commit_email: ${{ secrets.AUR_EMAIL }}
+          ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}

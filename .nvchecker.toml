@@ -1,0 +1,4 @@
+[aghub-bin]
+source = "github"
+github = "AkaraChen/aghub"
+use_max_tag = true
