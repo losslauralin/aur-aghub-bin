@@ -12,6 +12,8 @@ jobs:
   update:
     runs-on: ubuntu-latest
     container: archlinux:latest
+    outputs:
+      changed: ${{ steps.check.outputs.changed }}
     steps:
       - name: Install dependencies
         run: pacman -Syu --noconfirm git jq curl pacman-contrib
@@ -28,9 +30,31 @@ jobs:
           echo "old_ver=$OLD_VER" >> "$GITHUB_OUTPUT"
           echo "new_ver=$NEW_VER" >> "$GITHUB_OUTPUT"
           echo "Old: $OLD_VER -> New: $NEW_VER"
+          if [ "$OLD_VER" != "$NEW_VER" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Wait for upstream assets
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          NEW_VER=${{ steps.check.outputs.new_ver }}
+          BASE_URL="https://github.com/AkaraChen/aghub/releases/download/v${NEW_VER}"
+          for i in $(seq 1 12); do
+            HTTP_CODE=$(curl -sL -o /dev/null -w "%{http_code}" "${BASE_URL}/aghub_${NEW_VER}_amd64.deb")
+            if [ "$HTTP_CODE" = "200" ]; then
+              echo "Assets ready."
+              exit 0
+            fi
+            echo "Waiting for assets... attempt $i/12"
+            sleep 300
+          done
+          echo "::error::Assets not available after 60 minutes"
+          exit 1
 
       - name: Update PKGBUILD and .SRCINFO
-        if: steps.check.outputs.old_ver != steps.check.outputs.new_ver
+        if: steps.check.outputs.changed == 'true'
         run: |
           NEW_VER=${{ steps.check.outputs.new_ver }}
 
@@ -55,7 +79,7 @@ jobs:
 
   publish:
     needs: update
-    if: needs.update.result == 'success'
+    if: needs.update.outputs.changed == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
