@@ -11,53 +11,56 @@ permissions:
 jobs:
   update:
     runs-on: ubuntu-latest
+    container: archlinux:latest
     steps:
+      - name: Install dependencies
+        run: pacman -Syu --noconfirm git jq curl pacman-contrib
+
       - uses: actions/checkout@v4
 
       - name: Check for new version
         id: check
         run: |
           OLD_VER=$(grep '^pkgver=' PKGBUILD | cut -d= -f2)
-          LATEST_TAG=$(curl -sL "https://api.github.com/repos/AkaraChen/aghub/releases/latest" | jq -r '.tag_name')
+          LATEST_TAG=$(curl -sL -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/AkaraChen/aghub/releases/latest" | jq -r '.tag_name')
           NEW_VER="${LATEST_TAG#v}"
           echo "old_ver=$OLD_VER" >> "$GITHUB_OUTPUT"
           echo "new_ver=$NEW_VER" >> "$GITHUB_OUTPUT"
           echo "Old: $OLD_VER -> New: $NEW_VER"
 
-      - name: Update PKGBUILD
+      - name: Update PKGBUILD and .SRCINFO
         if: steps.check.outputs.old_ver != steps.check.outputs.new_ver
         run: |
           NEW_VER=${{ steps.check.outputs.new_ver }}
+
+          # Update pkgver and reset pkgrel
           sed -i "s/^pkgver=.*/pkgver=$NEW_VER/" PKGBUILD
+          sed -i "s/^pkgrel=.*/pkgrel=1/" PKGBUILD
 
-          # Download new sources
-          source PKGBUILD
-          for s in "${source[@]}"; do
-            url=$(echo "$s" | sed 's/.*:://')
-            url_expanded=$(eval echo "$url")
-            fname=$(basename "$url_expanded")
-            [ -f "$fname" ] || curl -sLO "$url_expanded"
-          done
+          # makepkg refuses to run as root, create a build user
+          useradd -m builduser
+          chown -R builduser:builduser .
 
-          # Regenerate sha256sums
-          SUMS=()
-          for s in "${source[@]}"; do
-            fname=$(basename "$s")
-            [ -f "$fname" ] || curl -sLO "$(eval echo "$s")"
-            SUMS+=("'$(sha256sum "$fname" | awk '{print $1}')'")
-          done
-          printf 'sha256sums=(%s)\n' "$(printf '%s\n' "${SUMS[@]}" | paste -sd' ')" > /tmp/sums_line
-          sed -i "/^sha256sums=/,/)/c\\$(cat /tmp/sums_line)" PKGBUILD
+          # Update checksums and regenerate .SRCINFO
+          su builduser -c "updpkgsums"
+          su builduser -c "makepkg --printsrcinfo > .SRCINFO"
 
-          # Commit
+          # Commit to GitHub repo
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add PKGBUILD
+          git add PKGBUILD .SRCINFO
           git commit -m "Update to v$NEW_VER"
           git push
 
+  publish:
+    needs: update
+    if: needs.update.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
       - name: Publish to AUR
-        if: steps.check.outputs.old_ver != steps.check.outputs.new_ver
         uses: KSXGitHub/github-actions-deploy-aur@v3.0.1
         with:
           pkgname: aghub-bin

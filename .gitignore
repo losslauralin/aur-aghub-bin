@@ -1,5 +1,6 @@
 *
 !PKGBUILD
+!.SRCINFO
 !aghub.desktop
 !.nvchecker.toml
 !.github/
