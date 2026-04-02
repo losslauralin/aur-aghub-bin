@@ -64,11 +64,12 @@ jobs:
 
           # makepkg refuses to run as root, create a build user
           useradd -m builduser
-          chown -R builduser:builduser .
+          chown builduser:builduser PKGBUILD aghub.desktop
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
           # Update checksums and regenerate .SRCINFO
-          su builduser -c "updpkgsums"
-          su builduser -c "makepkg --printsrcinfo > .SRCINFO"
+          su builduser -c "cd '$GITHUB_WORKSPACE' && updpkgsums"
+          su builduser -c "cd '$GITHUB_WORKSPACE' && makepkg --printsrcinfo > .SRCINFO"
 
           # Commit to GitHub repo
           git config user.name "github-actions[bot]"
