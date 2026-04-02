@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: '0 3 * * *'
   workflow_dispatch:
+    inputs:
+      force_publish:
+        description: "Force publish to AUR regardless of version"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -80,7 +85,7 @@ jobs:
 
   publish:
     needs: update
-    if: needs.update.outputs.changed == 'true'
+    if: needs.update.outputs.changed == 'true' || github.event.inputs.force_publish == 'true' || inputs.force_publish == true
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
