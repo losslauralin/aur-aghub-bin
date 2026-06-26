@@ -14,17 +14,19 @@ paru -S aghub-bin
 yay -S aghub-bin
 ```
 
-## 🛠️ Troubleshooting (Wayland Users)
+## 🛠️ Troubleshooting (NVIDIA + Wayland Users)
 
-Because `aghub` relies on WebKit2GTK, you may encounter rendering issues (e.g., blank, black, or transparent windows) under a native Wayland session.
+On NVIDIA proprietary drivers under Wayland, WebKitGTK can crash when its DMA-BUF renderer negotiates the `linux-drm-syncobj-v1` explicit sync protocol with the driver. The package desktop entry sets `__NV_DISABLE_EXPLICIT_SYNC=1` so NVIDIA falls back to implicit sync while keeping hardware acceleration enabled.
 
-* **Launching via App Icon:** The included `.desktop` file already forces X11 mode (`GDK_BACKEND=x11`) to prevent these issues.
+* **Launching via App Icon:** The included `.desktop` file already applies the NVIDIA Wayland compatibility variable.
 
-* **Launching via Terminal:** If you run the GUI directly from your terminal, please apply the compatibility variables manually:
+* **Launching via Terminal:** If you run the GUI directly from your terminal, apply the same variable manually:
 
   ```bash
-  GDK_BACKEND=x11 WEBKIT_DISABLE_DMABUF_RENDERER=1 aghub
+  __NV_DISABLE_EXPLICIT_SYNC=1 aghub
   ```
+
+`GDK_BACKEND=x11 WEBKIT_DISABLE_DMABUF_RENDERER=1` is no longer used here: disabling DMA-BUF can still crash on NVIDIA's EGL fallback path, and forcing X11 does not provide a reliable workaround for NVIDIA users.
 
 ## 🪲 Where to Report Issues?
 
