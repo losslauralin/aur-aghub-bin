@@ -1,12 +1,12 @@
-# aghub-bin (AUR)
+# aghub-bin
 
-> 📦 **Unofficial** AUR package for [aghub](https://github.com/AkaraChen/aghub) — One hub for every AI coding agent.
+Unofficial AUR package for [aghub](https://github.com/AkaraChen/aghub).
 
-This repository hosts the `PKGBUILD` and CI workflow for automatically publishing the upstream release to the Arch User Repository. The `aghub` project and its trademarks belong entirely to the original developers.
+This repo only contains the Arch packaging bits: `PKGBUILD`, `.SRCINFO`, the desktop entry, and the workflow that tracks upstream releases. The app itself is maintained by the upstream project.
 
-## 🚀 Installation
+## Install
 
-Available in the [AUR](https://aur.archlinux.org/packages/aghub-bin). Install it using your preferred AUR helper:
+The package is available on the [AUR](https://aur.archlinux.org/packages/aghub-bin):
 
 ```bash
 paru -S aghub-bin
@@ -14,26 +14,36 @@ paru -S aghub-bin
 yay -S aghub-bin
 ```
 
-## 🛠️ Troubleshooting (NVIDIA + Wayland Users)
+## NVIDIA + Wayland
 
-On NVIDIA proprietary drivers under Wayland, WebKitGTK can crash when its DMA-BUF renderer negotiates the `linux-drm-syncobj-v1` explicit sync protocol with the driver. The package desktop entry sets `__NV_DISABLE_EXPLICIT_SYNC=1` so NVIDIA falls back to implicit sync while keeping hardware acceleration enabled.
+The packaged desktop launcher sets `__NV_DISABLE_EXPLICIT_SYNC=1`.
 
-* **Launching via App Icon:** The included `.desktop` file already applies the NVIDIA Wayland compatibility variable.
+Why this is here: with proprietary NVIDIA drivers on Wayland, WebKitGTK can crash when its DMA-BUF renderer negotiates the `linux-drm-syncobj-v1` explicit sync protocol with the driver. Disabling explicit sync makes NVIDIA fall back to implicit sync while keeping hardware acceleration enabled.
 
-* **Launching via Terminal:** If you run the GUI directly from your terminal, apply the same variable manually:
+If you start aghub from the app launcher, no extra step is needed. If you run it from a terminal, use the same environment variable yourself:
 
-  ```bash
-  __NV_DISABLE_EXPLICIT_SYNC=1 aghub
-  ```
+```bash
+__NV_DISABLE_EXPLICIT_SYNC=1 aghub
+```
 
 `GDK_BACKEND=x11 WEBKIT_DISABLE_DMABUF_RENDERER=1` is no longer used here: disabling DMA-BUF can still crash on NVIDIA's EGL fallback path, and forcing X11 does not provide a reliable workaround for NVIDIA users.
 
-## 🪲 Where to Report Issues?
+## Where to report issues
 
-To save everyone's time, please route your feedback to the correct repository:
+Please send app bugs to upstream and packaging bugs here.
 
-* 🔴 **App Bugs → [Report to Upstream](https://github.com/AkaraChen/aghub/issues)**
-  *(e.g., UI glitches, AI agent config errors, Wayland rendering complaints, feature requests)*
+Report to [AkaraChen/aghub](https://github.com/AkaraChen/aghub/issues) for:
 
-* 🟢 **Packaging Bugs → [Report Here](https://github.com/losslauralin/aur-aghub-bin/issues)**
-  *(e.g., Checksum mismatches, installation failures, missing `.desktop` files, outdated package version)*
+- UI bugs
+- agent configuration behavior
+- feature requests
+- runtime bugs that are not caused by the AUR package
+
+Report to [this repo](https://github.com/losslauralin/aur-aghub-bin/issues) for:
+
+- checksum mismatches
+- install failures
+- missing or wrong desktop entry
+- outdated package version
+
+If you are not sure which one it is, open the issue here and include the command you ran plus the full error output.
