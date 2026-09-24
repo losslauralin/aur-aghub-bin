@@ -1,117 +1,121 @@
 name: Update and publish to AUR
 
+# 版本来源 = 上游 release 列表（含 prerelease）：上游发什么，AUR 就是什么。
+# 判定逻辑在 .github/scripts/ 下，可脱离 Actions 本地运行验证。
+
 on:
   schedule:
     - cron: '0 3 * * *'
+  # 手动改 PKGBUILD 后推到 master 立刻走一遍发布检查
+  push:
+    branches: [master]
+    paths:
+      - PKGBUILD
+      - .SRCINFO
   workflow_dispatch:
     inputs:
       force_publish:
-        description: "Force publish to AUR regardless of version"
+        description: "忽略与 AUR 的内容比对，强制推送一次"
         type: boolean
         default: false
 
 permissions:
   contents: write
 
+# 手动 dispatch 与 cron 撞车时不并发跑两个 update
+concurrency:
+  group: aghub-bin-sync
+  cancel-in-progress: false
+
 jobs:
   update:
     runs-on: ubuntu-latest
     container: archlinux:latest
-    outputs:
-      changed: ${{ steps.check.outputs.changed }}
     steps:
       - name: Install dependencies
         run: pacman -Syu --noconfirm git jq curl pacman-contrib
 
+      # fetch-depth: 0 是给后面 git pull --rebase 用的
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Check for new version
-        id: check
+      - name: Assert tag -> pkgver mapping invariants
+        run: bash .github/scripts/test-mapping.sh
+
+      - name: Select upstream release
+        id: upstream
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPSTREAM_REPO: AkaraChen/aghub
         run: |
-          OLD_VER=$(grep '^pkgver=' PKGBUILD | cut -d= -f2)
-          LATEST_TAG=$(curl -sL -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            "https://api.github.com/repos/AkaraChen/aghub/releases/latest" | jq -r '.tag_name')
-          NEW_VER="${LATEST_TAG#v}"
-          echo "old_ver=$OLD_VER" >> "$GITHUB_OUTPUT"
-          echo "new_ver=$NEW_VER" >> "$GITHUB_OUTPUT"
-          echo "Old: $OLD_VER -> New: $NEW_VER"
-          if [ "$OLD_VER" != "$NEW_VER" ]; then
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-          fi
+          set -euo pipefail
+          CURRENT_PKGVER="$(sed -n 's/^pkgver=//p' PKGBUILD)" \
+            bash .github/scripts/select-upstream-version.sh | tee -a "$GITHUB_OUTPUT"
 
-      - name: Wait for upstream assets
-        if: steps.check.outputs.changed == 'true'
+      - name: Rewrite PKGBUILD, verify checksums, regenerate .SRCINFO
+        env:
+          UPSTREAM_TAG: ${{ steps.upstream.outputs.tag }}
+          NEW_PKGVER: ${{ steps.upstream.outputs.pkgver }}
         run: |
-          NEW_VER=${{ steps.check.outputs.new_ver }}
-          BASE_URL="https://github.com/AkaraChen/aghub/releases/download/v${NEW_VER}"
-          for i in $(seq 1 12); do
-            HTTP_CODE=$(curl -sL -o /dev/null -w "%{http_code}" "${BASE_URL}/aghub_${NEW_VER}_amd64.deb")
-            if [ "$HTTP_CODE" = "200" ]; then
-              echo "Assets ready."
-              exit 0
-            fi
-            echo "Waiting for assets... attempt $i/12"
-            sleep 300
-          done
-          echo "::error::Assets not available after 60 minutes"
-          exit 1
-
-      - name: Update PKGBUILD and .SRCINFO
-        if: steps.check.outputs.changed == 'true'
-        run: |
-          NEW_VER=${{ steps.check.outputs.new_ver }}
-
-          # Update pkgver and reset pkgrel
-          sed -i "s/^pkgver=.*/pkgver=$NEW_VER/" PKGBUILD
-          sed -i "s/^pkgrel=.*/pkgrel=1/" PKGBUILD
-
-          # makepkg refuses to run as root, create a build user
+          set -euo pipefail
+          # makepkg 不允许以 root 运行
           useradd -m builduser
           chown -R builduser:builduser .
-          git config --global --add safe.directory "*"
+          git config --global --add safe.directory '*'
+          su builduser -s /bin/bash -c "cd '$GITHUB_WORKSPACE' && env UPSTREAM_TAG='$UPSTREAM_TAG' NEW_PKGVER='$NEW_PKGVER' bash .github/scripts/update-pkgbuild.sh"
 
-          # Update checksums and regenerate .SRCINFO
-          su builduser -c "cd '$GITHUB_WORKSPACE' && updpkgsums"
-          su builduser -c "cd '$GITHUB_WORKSPACE' && makepkg --printsrcinfo > .SRCINFO"
-
-          # Commit to GitHub repo
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+      - name: Commit and push if upstream changed something
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
           git add PKGBUILD .SRCINFO
-          git commit -m "Update to v$NEW_VER"
-          git push
+          if git diff --cached --quiet; then
+            echo "PKGBUILD/.SRCINFO 与上游一致，无需提交"
+            exit 0
+          fi
+          PKGVER="$(sed -n 's/^pkgver=//p' PKGBUILD)"
+          PKGREL="$(sed -n 's/^pkgrel=//p' PKGBUILD)"
+          echo "::notice::提交 ${PKGVER}-${PKGREL}（上游 ${{ steps.upstream.outputs.tag }}，原因 ${{ steps.upstream.outputs.new_version == 'true' && 'version' || 'checksums' }}）"
+          git commit -m "Update to ${PKGVER}-${PKGREL} (upstream ${{ steps.upstream.outputs.tag }})"
+          git pull --rebase --autostash origin "$GITHUB_REF_NAME"
+          git push origin "HEAD:$GITHUB_REF_NAME"
 
   publish:
     needs: update
-    if: needs.update.outputs.changed == 'true' || github.event.inputs.force_publish == 'true' || github.event_name == 'schedule'
+    # update 失败时也要能发布仓库里已提交的内容（例如手动改 PKGBUILD 的场景）
+    if: always()
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           ref: master
 
-      - name: Check if AUR needs update
-        id: aur_check
+      - name: Compare local PKGBUILD with AUR
+        id: aur
         run: |
-          sudo apt-get update -qq && sudo apt-get install -qq -y jq > /dev/null
-          PKG_VER=$(grep '^pkgver=' PKGBUILD | cut -d= -f2)
-          PKG_REL=$(grep '^pkgrel=' PKGBUILD | cut -d= -f2)
-          LOCAL_VER="${PKG_VER}-${PKG_REL}"
-          AUR_VER=$(curl -sL "https://aur.archlinux.org/rpc/v5/info?arg[]=aghub-bin" | jq -r '.results[0].Version // empty')
-          echo "local_ver=$LOCAL_VER"
-          echo "aur_ver=$AUR_VER"
-          if [ "$AUR_VER" != "$LOCAL_VER" ]; then
+          set -euo pipefail
+          if [ "${{ github.event.inputs.force_publish }}" = "true" ]; then
             echo "needs_publish=true" >> "$GITHUB_OUTPUT"
-            echo "AUR ($AUR_VER) behind local ($LOCAL_VER), will publish"
-          else
+            echo "force_publish=true，跳过比对"
+            exit 0
+          fi
+          if ! git clone --depth=1 -q https://aur.archlinux.org/aghub-bin.git /tmp/aur; then
+            echo "AUR 上没有 aghub-bin 或无法克隆，按首次发布处理"
+            echo "needs_publish=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if python3 .github/scripts/aur-drift.py /tmp/aur/PKGBUILD PKGBUILD; then
             echo "needs_publish=false" >> "$GITHUB_OUTPUT"
-            echo "AUR ($AUR_VER) matches local ($LOCAL_VER), skipping"
+            echo "AUR 与本地一致，跳过发布"
+          else
+            echo "needs_publish=true" >> "$GITHUB_OUTPUT"
+            echo "AUR 与本地不一致，需要发布"
           fi
 
       - name: Publish to AUR
-        if: steps.aur_check.outputs.needs_publish == 'true'
+        if: steps.aur.outputs.needs_publish == 'true'
         uses: KSXGitHub/github-actions-deploy-aur@v4.1.2
         with:
           pkgname: aghub-bin
